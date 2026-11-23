@@ -105,7 +105,7 @@ class VisionOracleRepository {
         }
     }
 
-    private val httpClient: OkHttpClient by lazy {
+    val httpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(10, TimeUnit.SECONDS)
@@ -127,18 +127,28 @@ class VisionOracleRepository {
         } else {
             recentVerifiedObjects.takeLast(7).joinToString(", ")
         }
+        val sampledSeedObject = if (!isCustomCategory) {
+            sampleRandomizedSeedObject(categoryTitle, recentVerifiedObjects)
+        } else {
+            null
+        }
 
         val prompt = buildString {
-            append("You are Actake's anti-cheat morning habit target randomizer. ")
+            append("You are Actake's anti-cheat wake-up camera challenge generator. ")
             append("The user staked money on the broad category: \"$categoryTitle\". ")
             if (categoryContextHint.isNotBlank()) {
                 append("Category context: $categoryContextHint. ")
             }
+            if (sampledSeedObject != null) {
+                append("Use this randomly selected everyday physical object as the exact target: \"$sampledSeedObject\". ")
+            }
             append("Recently verified items to AVOID repeating: $recentBlock. ")
-            append("Pick ONE concrete, easy-to-find real-world physical everyday object matching this category ")
-            append("that requires the user to get up and move rather than pre-stage items next to their pillow. ")
+            append("Craft a short 2-5 word targetObject label (e.g. 'Ceramic Coffee Mug'), ")
+            append("a clear 1-sentence visualCue instruction telling the user what to point their camera at, ")
+            append("a clean realistic studio photography referenceImagePrompt on a plain bright background with no text, ")
+            append("and a strict physical antiCheatRule (real 3D object, never a screen or printed photo). ")
             if (isCustomCategory) {
-                append("Because this is a Custom Category, set presetAssetKey to \"custom\" so a tailored studio reference preview can be generated. ")
+                append("Because this is a Custom Category, set presetAssetKey to \"custom\". ")
             }
             append("Return strict JSON matching the schema.")
         }
@@ -216,7 +226,8 @@ class VisionOracleRepository {
         poolId: String,
         userId: String,
         distanceMeters: Double? = null,
-        maxRadiusMeters: Double? = null
+        maxRadiusMeters: Double? = null,
+        referenceBitmap: Bitmap? = null
     ): VisionVerificationResult {
         val startedAt = System.currentTimeMillis()
 
@@ -236,14 +247,22 @@ class VisionOracleRepository {
             }
         }
 
-        // Scale down bitmap to stay well below inline payload limits and fast for Vision AI
+        // Scale down bitmaps to stay well below inline payload limits and fast for Vision AI
         val scaledBitmap = scaleBitmapForVision(bitmap, maxDim = 960)
+        val scaledReference = referenceBitmap?.let { scaleBitmapForVision(it, maxDim = 512) }
 
         val prompt = buildString {
             append("You are an anti-cheat accountability verifier for Actake. ")
-            append("Inspect this live camera photo carefully. ")
-            append("1) Confirm it is a live real-world photograph (reject photos of computer monitors, phone screens, or printed pictures). ")
-            append("2) Confirm the AI-randomized target object/action is clearly visible: ")
+            if (scaledReference != null) {
+                append("Image 1 is the AI reference image of the item initially displayed to the user when their alarm went off. ")
+                append("Image 2 is the live camera photo captured by the user. ")
+                append("1) Confirm Image 2 is a live real-world 3D photograph taken with a physical camera (strictly reject photos of phone/computer screens, screenshots, or pictures of Image 1). ")
+                append("2) Confirm Image 2 is actually pointing directly at a real physical instance of the exact item shown in Image 1 and described here: ")
+            } else {
+                append("Inspect this live camera photo carefully. ")
+                append("1) Confirm it is a live real-world photograph (reject photos of computer monitors, phone screens, or printed pictures). ")
+                append("2) Confirm the AI-randomized target object/action is clearly visible: ")
+            }
             append(targetPrompt)
             append(". Mission type: ").append(missionType).append(". ")
             append("Return JSON with verified, confidence (0.0 to 1.0), livePhotoConfirmed, detectedObject, and reason.")
@@ -253,6 +272,9 @@ class VisionOracleRepository {
             withTimeout(60_000L) {
                 verifyModel.generateContent(
                     content {
+                        if (scaledReference != null) {
+                            image(scaledReference)
+                        }
                         image(scaledBitmap)
                         text(prompt)
                     }
@@ -278,7 +300,7 @@ class VisionOracleRepository {
         val detectedObject = json.optString("detectedObject", "Scene")
         val reason = json.optString("reason", "Inspection complete.")
 
-        val passed = verified && liveConfirmed && confidence >= 0.75
+        val passed = verified && liveConfirmed && confidence >= 0.80
 
         val (proofHashHex, signatureHex) = if (passed) {
             signOracleAttestation(scaledBitmap, poolId, userId, startedAt)
@@ -430,7 +452,132 @@ class VisionOracleRepository {
             }
         }
 
+    /**
+     * Fetches the live confirmed Solana Devnet recent blockhash via JSON-RPC (`getLatestBlockhash`)
+     * so every Seeker wallet stake payment transaction binds to real chain state.
+     */
+    suspend fun fetchLatestSolanaBlockhash(): Result<String> =
+        withContext(Dispatchers.IO) {
+            try {
+                val payload = JSONObject().apply {
+                    put("jsonrpc", "2.0")
+                    put("id", 1)
+                    put("method", "getLatestBlockhash")
+                    put("params", JSONArray().put(JSONObject().put("commitment", "confirmed")))
+                }
+                val req = Request.Builder()
+                    .url("https://api.devnet.solana.com")
+                    .post(payload.toString().toRequestBody("application/json".toMediaType()))
+                    .build()
+
+                httpClient.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) {
+                        throw IllegalStateException("Solana RPC returned HTTP ${resp.code}")
+                    }
+                    val json = JSONObject(resp.body?.string().orEmpty())
+                    if (json.has("error")) {
+                        throw IllegalStateException(json.getJSONObject("error").optString("message", "RPC error"))
+                    }
+                    val blockhash = json.getJSONObject("result")
+                        .getJSONObject("value")
+                        .optString("blockhash", "")
+                    if (blockhash.isBlank()) {
+                        throw IllegalStateException("Empty blockhash returned by Solana RPC")
+                    }
+                    Result.success(blockhash)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Solana Devnet getLatestBlockhash failed: ${e.message}")
+                Result.failure(e)
+            }
+        }
+
     companion object {
+        val GENERAL_OBJECT_POOL = listOf(
+            "a ceramic coffee cup or mug",
+            "a toothbrush",
+            "a pair of shoes or sneakers",
+            "a set of house keys",
+            "a closed book or notebook",
+            "a spoon or fork",
+            "a reusable water bottle",
+            "a pair of eyeglasses or sunglasses",
+            "a wristwatch or wall clock",
+            "a kitchen kettle or glass of water"
+        )
+
+        private val CATEGORY_OBJECT_POOLS: Map<String, List<String>> = mapOf(
+            "WAKEUP" to listOf(
+                "a ceramic coffee cup or mug",
+                "a toothbrush",
+                "a spoon or fork",
+                "a set of house keys",
+                "a pair of eyeglasses or sunglasses",
+                "a wristwatch or wall clock",
+                "a bathroom sink faucet"
+            ),
+            "READING" to listOf(
+                "a closed book or notebook",
+                "a pen resting on an open notebook",
+                "a pair of eyeglasses or sunglasses",
+                "a study desk lamp",
+                "a wristwatch or wall clock"
+            ),
+            "GYM" to listOf(
+                "a pair of shoes or sneakers",
+                "a reusable water bottle",
+                "a dumbbell or hand weight",
+                "a yoga mat or towel",
+                "a wristwatch or fitness band"
+            ),
+            "OUTDOORS" to listOf(
+                "a pair of shoes or sneakers outdoors",
+                "green grass or tree leaves in daylight",
+                "a set of house keys by the front door",
+                "blue sky or outdoor street sign"
+            ),
+            "HYDRATION" to listOf(
+                "a reusable water bottle",
+                "a ceramic coffee cup or mug",
+                "a clear glass of water",
+                "a spoon or fork",
+                "a kitchen kettle"
+            )
+        )
+
+        /**
+         * Samples a genuinely randomized everyday physical object matching the habit category
+         * while avoiding the user's last 7 verified objects (never hardcoded to static prompts).
+         */
+        fun sampleRandomizedSeedObject(
+            categoryTitle: String,
+            recentVerifiedObjects: List<String>
+        ): String {
+            val upper = categoryTitle.uppercase()
+            val pool = when {
+                "WAKE" in upper || "MORNING" in upper -> CATEGORY_OBJECT_POOLS["WAKEUP"]
+                "READ" in upper || "STUDY" in upper -> CATEGORY_OBJECT_POOLS["READING"]
+                "GYM" in upper || "FIT" in upper -> CATEGORY_OBJECT_POOLS["GYM"]
+                "OUTDOOR" in upper || "GRASS" in upper || "RUN" in upper || "HUNT" in upper ->
+                    CATEGORY_OBJECT_POOLS["OUTDOORS"]
+                "HYDRAT" in upper || "KITCHEN" in upper || "WATER" in upper ->
+                    CATEGORY_OBJECT_POOLS["HYDRATION"]
+                else -> GENERAL_OBJECT_POOL
+            } ?: GENERAL_OBJECT_POOL
+
+            val recentLower = recentVerifiedObjects.takeLast(7).map { it.lowercase() }
+            val freshCandidates = pool.filter { candidate ->
+                val lower = candidate.lowercase()
+                recentLower.none { recent ->
+                    recent.isNotBlank() && (lower.contains(recent) || recent.contains(lower.removePrefix("a ").removePrefix("an ")))
+                }
+            }
+            val effectivePool = freshCandidates.ifEmpty { pool }
+            return effectivePool.random()
+        }
+
         fun haversineMeters(
             lat1: Double,
             lon1: Double,

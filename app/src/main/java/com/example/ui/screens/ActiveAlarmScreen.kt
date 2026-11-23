@@ -41,8 +41,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
@@ -85,7 +87,6 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -126,6 +127,7 @@ fun ActiveAlarmScreen(
     verificationState: VerificationUiState,
     strictnessEnabled: Boolean,
     onRerollTarget: () -> Unit,
+    onRetryPreviewImage: () -> Unit = {},
     onCaptureFrame: (Bitmap) -> Unit,
     onRetryReset: () -> Unit,
     onExitCancelled: () -> Unit
@@ -164,6 +166,7 @@ fun ActiveAlarmScreen(
     val audioPlayer = remember(context) { AlarmAudioPlayer(context) }
     var boundCameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
     var showStrictExitDialog by remember { mutableStateOf(false) }
+    var showExpandedReferenceDialog by remember { mutableStateOf(false) }
 
     fun exitLiveCam() {
         audioPlayer.stop()
@@ -366,13 +369,16 @@ fun ActiveAlarmScreen(
                 }
             }
 
-            // Floating AI Randomized Target + Visual Reference Preview Card
+            // Floating AI Randomized Target + Runtime AI-Generated Visual Reference Preview Card
+            // Locked to the exact item initially displayed in the alarm pop-up
             RandomizedTargetReferenceCard(
                 randomizedTargetState = randomizedTargetState,
                 rewardPoints = rewardPoints,
                 formattedCountdown = formattedCountdown,
-                canReroll = !isBusy && capturedBitmap == null,
-                onRerollTarget = onRerollTarget
+                canReroll = false,
+                onRerollTarget = onRerollTarget,
+                onRetryPreviewImage = onRetryPreviewImage,
+                onExpandReference = { showExpandedReferenceDialog = true }
             )
 
             // Full-Bleed 32dp-Rounded CameraX Live Viewfinder OR Frozen Review Preview
@@ -544,7 +550,7 @@ fun ActiveAlarmScreen(
                                         fontWeight = FontWeight.Bold
                                     )
                                     Text(
-                                        text = "x402 rail + Gemini Vision anti-spoof verification",
+                                        text = "Gemini Vision anti-spoof + Ed25519 oracle verification",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = Color.White.copy(alpha = 0.72f)
                                     )
@@ -779,8 +785,8 @@ fun ActiveAlarmScreen(
                     }
                     val verifyLabel = when (verificationState) {
                         is VerificationUiState.Ready -> if (capturedBitmap != null) "Review" else "Live"
-                        is VerificationUiState.Scanning -> "x402 + AI"
-                        is VerificationUiState.VerifyingOracle -> "Attesting"
+                        is VerificationUiState.Scanning -> "Vision AI"
+                        is VerificationUiState.VerifyingOracle -> "Escrow Tx"
                         is VerificationUiState.Rejected -> "Retry"
                         is VerificationUiState.Error -> "Error"
                     }
@@ -847,6 +853,73 @@ fun ActiveAlarmScreen(
             }
         )
     }
+
+    // Expanded Full-Size AI-Generated Target Image + Capture Description Modal
+    val readyState = randomizedTargetState as? RandomizedTargetUiState.Ready
+    if (showExpandedReferenceDialog && readyState != null) {
+        AlertDialog(
+            onDismissRequest = { showExpandedReferenceDialog = false },
+            containerColor = BgCard,
+            title = {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = "Snap: ${readyState.target.targetObject}",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = "AI-Generated Visual Reference to Turn Off Alarm",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AccentCoral,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    val bmp = readyState.generatedPreviewBitmap
+                    if (bmp != null) {
+                        Image(
+                            bitmap = bmp.asImageBitmap(),
+                            contentDescription = "AI generated visual reference for ${readyState.target.targetObject}",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(220.dp)
+                                .clip(RoundedCornerShape(20.dp))
+                        )
+                    }
+                    Text(
+                        text = readyState.target.visualCue,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = "Anti-Cheat: ${readyState.target.antiCheatRule}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextMuted
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showExpandedReferenceDialog = false },
+                    shape = RoundedCornerShape(50),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = BgObsidian,
+                        contentColor = Color.White
+                    )
+                ) {
+                    Text("Got It • Snap Now", fontWeight = FontWeight.Bold)
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -855,7 +928,9 @@ private fun RandomizedTargetReferenceCard(
     rewardPoints: Int,
     formattedCountdown: String,
     canReroll: Boolean,
-    onRerollTarget: () -> Unit
+    onRerollTarget: () -> Unit,
+    onRetryPreviewImage: () -> Unit,
+    onExpandReference: () -> Unit
 ) {
     Surface(
         shape = RoundedCornerShape(20.dp),
@@ -871,24 +946,43 @@ private fun RandomizedTargetReferenceCard(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Left 64x64dp Reference Visual Thumbnail
+            // Left 72x72dp Runtime AI-Generated Reference Thumbnail (Zero static mock fallback)
+            val ready = randomizedTargetState as? RandomizedTargetUiState.Ready
             Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = BgCard,
                 shadowElevation = 2.dp,
                 modifier = Modifier
-                    .size(64.dp)
+                    .size(72.dp)
                     .clip(RoundedCornerShape(16.dp))
+                    .clickable(enabled = ready != null) {
+                        if (ready?.customPreviewError != null) {
+                            onRetryPreviewImage()
+                        } else if (ready?.generatedPreviewBitmap != null) {
+                            onExpandReference()
+                        }
+                    }
                     .testTag("reference_preview_thumbnail")
             ) {
                 Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                     when (randomizedTargetState) {
                         is RandomizedTargetUiState.Loading -> {
-                            CircularProgressIndicator(
-                                color = AccentCoral,
-                                strokeWidth = 2.5.dp,
-                                modifier = Modifier.size(26.dp)
-                            )
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(3.dp)
+                            ) {
+                                CircularProgressIndicator(
+                                    color = AccentCoral,
+                                    strokeWidth = 2.5.dp,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Text(
+                                    text = "Rolling",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontSize = 9.sp,
+                                    color = TextMuted
+                                )
+                            }
                         }
 
                         is RandomizedTargetUiState.Error -> {
@@ -901,59 +995,59 @@ private fun RandomizedTargetReferenceCard(
                         }
 
                         is RandomizedTargetUiState.Ready -> {
-                            val customBmp = randomizedTargetState.generatedPreviewBitmap
+                            val generatedBmp = randomizedTargetState.generatedPreviewBitmap
                             when {
-                                customBmp != null -> {
+                                generatedBmp != null -> {
                                     Image(
-                                        bitmap = customBmp.asImageBitmap(),
-                                        contentDescription = "AI reference preview for ${randomizedTargetState.target.targetObject}",
+                                        bitmap = generatedBmp.asImageBitmap(),
+                                        contentDescription = "AI generated image of ${randomizedTargetState.target.targetObject}",
                                         contentScale = ContentScale.Crop,
                                         modifier = Modifier.fillMaxSize()
                                     )
                                 }
 
                                 randomizedTargetState.isGeneratingCustomPreview -> {
-                                    CircularProgressIndicator(
-                                        color = AccentCoral,
-                                        strokeWidth = 2.5.dp,
-                                        modifier = Modifier.size(26.dp)
-                                    )
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(3.dp),
+                                        modifier = Modifier.padding(4.dp)
+                                    ) {
+                                        CircularProgressIndicator(
+                                            color = AccentCoral,
+                                            strokeWidth = 2.5.dp,
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                        Text(
+                                            text = "AI img...",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontSize = 9.sp,
+                                            color = AccentCoral,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
                                 }
 
-                                randomizedTargetState.customPreviewError != null -> {
+                                else -> {
+                                    // Visible error with 1-tap retry (strictly no fake static fallback)
                                     Column(
                                         horizontalAlignment = Alignment.CenterHorizontally,
                                         verticalArrangement = Arrangement.Center,
                                         modifier = Modifier.padding(4.dp)
                                     ) {
                                         Icon(
-                                            imageVector = Icons.Filled.ErrorOutline,
-                                            contentDescription = "Reference preview unavailable",
+                                            imageVector = Icons.Filled.Refresh,
+                                            contentDescription = "Retry AI reference image",
                                             tint = AccentDanger,
                                             modifier = Modifier.size(20.dp)
                                         )
                                         Text(
-                                            text = "No img",
+                                            text = "Retry AI",
                                             style = MaterialTheme.typography.labelSmall,
                                             fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
                                             color = AccentDanger
                                         )
                                     }
-                                }
-
-                                else -> {
-                                    val drawableRes = when (randomizedTargetState.target.presetAssetKey.lowercase()) {
-                                        "notebook" -> R.drawable.img_ref_notebook_1795452405900
-                                        "dumbbell" -> R.drawable.img_ref_dumbbell_1795452407075
-                                        "outdoors" -> R.drawable.img_ref_outdoors_1795452407138
-                                        else -> R.drawable.img_ref_mug_1795452406491
-                                    }
-                                    Image(
-                                        painter = painterResource(id = drawableRes),
-                                        contentDescription = "Visual reference for ${randomizedTargetState.target.targetObject}",
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
                                 }
                             }
                         }
@@ -961,7 +1055,7 @@ private fun RandomizedTargetReferenceCard(
                 }
             }
 
-            // Center Target Prompt Text
+            // Center Target Title + Full Capture Description
             Column(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(2.dp)
@@ -969,7 +1063,7 @@ private fun RandomizedTargetReferenceCard(
                 when (randomizedTargetState) {
                     is RandomizedTargetUiState.Loading -> {
                         Text(
-                            text = "Rolling AI anti-cheat target...",
+                            text = "Rolling AI alarm target...",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold,
                             color = TextPrimary,
@@ -977,7 +1071,7 @@ private fun RandomizedTargetReferenceCard(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "Avoiding your last 7 verified objects",
+                            text = "Generating randomized item & AI picture",
                             style = MaterialTheme.typography.labelSmall,
                             color = TextMuted
                         )
@@ -1005,14 +1099,29 @@ private fun RandomizedTargetReferenceCard(
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.ExtraBold,
                             color = TextPrimary,
-                            maxLines = 2,
+                            maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "${randomizedTargetState.target.visualCue} • +$rewardPoints \$ACT",
+                            text = randomizedTargetState.target.visualCue,
                             style = MaterialTheme.typography.labelSmall,
-                            color = TextMuted,
+                            color = TextPrimary.copy(alpha = 0.85f),
                             maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        val statusHint = when {
+                            randomizedTargetState.isGeneratingCustomPreview -> "Generating AI photo • +$rewardPoints \$ACT"
+                            randomizedTargetState.generatedPreviewBitmap != null -> "Tap photo to enlarge • +$rewardPoints \$ACT"
+                            randomizedTargetState.customPreviewError != null -> "Image error (tap box to retry)"
+                            else -> "+$rewardPoints \$ACT on verification"
+                        }
+                        Text(
+                            text = statusHint,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (randomizedTargetState.customPreviewError != null) AccentDanger else AccentCoral,
+                            maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                     }

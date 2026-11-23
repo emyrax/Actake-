@@ -22,9 +22,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -180,6 +183,8 @@ fun HuntsScreen(
         else -> "${distanceMeters.toInt()}m away"
     }
 
+    val navBarBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -195,7 +200,7 @@ fun HuntsScreen(
                 start = 18.dp,
                 end = 18.dp,
                 top = 12.dp,
-                bottom = 112.dp
+                bottom = 118.dp + navBarBottom
             ),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
@@ -315,6 +320,7 @@ fun HuntsScreen(
                                     fontFamily = MonoFontFamily,
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 26.sp,
+                                    style = MaterialTheme.typography.headlineSmall.copy(fontFeatureSettings = "tnum"),
                                     color = Color.White
                                 )
                                 Text(

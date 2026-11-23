@@ -177,9 +177,9 @@ data class CelebrationReceipt(
     val squadId: String,
     val pointsEarned: Int = 50,
     val verifiedTargetObject: String = "",
-    val x402FeeUsdc: Double = 0.0,
-    val x402Sponsored: Boolean = false,
-    val x402Header: String = ""
+    val escrowTxSignature: String = "",
+    val tokenStandardLabel: String = "SPL Token",
+    val skrZeroFee: Boolean = false
 )
 
 enum class AlarmSoundOption(val label: String, val subtitle: String, val frequencyHz: Int) {

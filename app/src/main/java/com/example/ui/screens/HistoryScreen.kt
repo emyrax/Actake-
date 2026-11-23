@@ -9,9 +9,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -108,6 +111,8 @@ fun HistoryScreen(
             .sumOf { effectiveEarnedAmount(it) }
     }
 
+    val navBarBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -124,7 +129,7 @@ fun HistoryScreen(
                 start = 20.dp,
                 end = 20.dp,
                 top = 14.dp,
-                bottom = 112.dp
+                bottom = 118.dp + navBarBottom
             ),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {

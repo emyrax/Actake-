@@ -10,9 +10,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -26,8 +29,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Flag
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.outlined.Timer
@@ -187,6 +190,7 @@ fun MainDashboard(
             )
         }
     ) {
+        val navBarBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
@@ -197,7 +201,7 @@ fun MainDashboard(
                 start = 20.dp,
                 end = 20.dp,
                 top = 16.dp,
-                bottom = 124.dp
+                bottom = 118.dp + navBarBottom
             ),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
@@ -460,7 +464,6 @@ fun ActiveHabitStakeCard(
                 shape = RoundedCornerShape(26.dp)
             )
             .clip(RoundedCornerShape(26.dp))
-            .clickable(onClick = onVerifyClick)
             .testTag("active_stake_row_${stake.id}")
     ) {
         Column(
@@ -624,7 +627,7 @@ fun ActiveHabitStakeCard(
                     .clip(RoundedCornerShape(50))
             )
 
-            // Bottom Footer: AI Anti-Cheat Metadata + Verify Proof Action Button (48dp touch target)
+            // Bottom Footer: Alarm Armed Metadata + Disabled Verify Proof Button (unlocks when alarm rings)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -642,7 +645,7 @@ fun ActiveHabitStakeCard(
                         modifier = Modifier.size(14.dp)
                     )
                     Text(
-                        text = "AI Random Target • ${stake.alarmSound}",
+                        text = "Unlocks at ${stake.wakeTimeLabel} alarm • ${stake.alarmSound}",
                         style = MaterialTheme.typography.labelSmall,
                         color = TextMuted,
                         maxLines = 1,
@@ -653,11 +656,14 @@ fun ActiveHabitStakeCard(
                 Spacer(modifier = Modifier.width(8.dp))
 
                 Button(
-                    onClick = onVerifyClick,
+                    onClick = {},
+                    enabled = false,
                     shape = RoundedCornerShape(50),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = BgObsidian,
-                        contentColor = Color.White
+                        contentColor = Color.White,
+                        disabledContainerColor = BgSurfaceSoft,
+                        disabledContentColor = TextMuted
                     ),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
                     modifier = Modifier
@@ -666,13 +672,13 @@ fun ActiveHabitStakeCard(
                         .testTag("verify_stake_button_${stake.id}")
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.CameraAlt,
+                        imageVector = Icons.Filled.Lock,
                         contentDescription = null,
-                        modifier = Modifier.size(16.dp)
+                        modifier = Modifier.size(15.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Verify Proof",
+                        text = stringResource(R.string.verify_proof_label),
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.Bold
                     )

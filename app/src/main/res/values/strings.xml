@@ -56,4 +56,11 @@
     <string name="cd_create_squad">Create new accountability squad</string>
     <string name="cd_share_blink">Share Solana Blink invite link</string>
     <string name="cd_wallet_settings">Account and Solana wallet settings</string>
+    <string name="verify_proof_label">Verify Proof</string>
+    <string name="verify_proof_locked_hint">Opens when alarm rings</string>
+    <string name="alarm_popup_badge">ALARM RINGING</string>
+    <string name="alarm_popup_subtitle">Find this exact item, then tap Verify Proof to open the live camera.</string>
+    <string name="alarm_popup_verify_cta">Verify Proof</string>
+    <string name="alarm_popup_preparing">Generating AI Image &amp; Description…</string>
+    <string name="alarm_popup_retry">Retry AI Challenge</string>
 </resources>

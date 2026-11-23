@@ -1,6 +1,7 @@
 package com.example
 
 import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -42,9 +43,11 @@ import com.example.data.repository.LocalActakeStore
 import com.example.firebase.configureAppCheck
 import com.example.firebase.onGoogleSignInClicked
 import com.example.firebase.signOutFromActake
-import com.example.solana.SolanaSeekerWalletManager
+import com.example.solana.SolanaWalletProvider
+import com.example.solana.SolanaWalletProviderHost
 import com.example.ui.components.ActakeFloatingNavBar
 import com.example.ui.components.ActakeTab
+import com.example.ui.components.AlarmChallengePopupDialog
 import com.example.ui.screens.ActiveAlarmScreen
 import com.example.ui.screens.AlarmSettingsScreen
 import com.example.ui.screens.CelebrationScreen
@@ -62,7 +65,9 @@ import com.example.viewmodel.DataState
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.Calendar
 
 private const val ROUTE_HOME = "home"
 private const val ROUTE_MISSIONS = "missions"
@@ -73,7 +78,15 @@ private const val ROUTE_ALARM_SETTINGS = "alarm_settings"
 private const val ROUTE_ACTIVE_ALARM = "active_alarm"
 private const val ROUTE_CELEBRATION = "celebration"
 
+private data class AlarmLaunchEvent(
+    val eventId: Long,
+    val missionTitle: String,
+    val alarmSound: String
+)
+
 class MainActivity : ComponentActivity() {
+    private var alarmLaunchEvent by mutableStateOf<AlarmLaunchEvent?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -81,19 +94,30 @@ class MainActivity : ComponentActivity() {
         configureAppCheck(this, intent)
 
         enableEdgeToEdge()
-
-        val launchedFromAlarm = intent?.getBooleanExtra(EXTRA_ALARM_TRIGGERED, false) == true
-        val alarmMissionTitle = intent?.getStringExtra(EXTRA_ALARM_MISSION_TITLE) ?: "Morning Wakeup"
-        val alarmSound = intent?.getStringExtra(EXTRA_ALARM_SOUND) ?: "Siren"
+        captureAlarmIntent(intent)
 
         setContent {
             ActakeTheme {
                 ActakeRoot(
-                    launchedFromAlarm = launchedFromAlarm,
-                    alarmMissionTitle = alarmMissionTitle,
-                    alarmSound = alarmSound
+                    alarmLaunchEvent = alarmLaunchEvent
                 )
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        captureAlarmIntent(intent)
+    }
+
+    private fun captureAlarmIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra(EXTRA_ALARM_TRIGGERED, false) == true) {
+            alarmLaunchEvent = AlarmLaunchEvent(
+                eventId = System.currentTimeMillis(),
+                missionTitle = intent.getStringExtra(EXTRA_ALARM_MISSION_TITLE) ?: "Morning Wakeup",
+                alarmSound = intent.getStringExtra(EXTRA_ALARM_SOUND) ?: "Siren"
+            )
         }
     }
 }
@@ -103,24 +127,29 @@ private const val KEY_GUEST_MODE_ACTIVE = "guest_mode_active"
 
 @Composable
 private fun ActakeRoot(
-    launchedFromAlarm: Boolean,
-    alarmMissionTitle: String,
-    alarmSound: String
+    alarmLaunchEvent: AlarmLaunchEvent?
 ) {
     val context = LocalContext.current
     val sessionPrefs = remember(context) {
         context.applicationContext.getSharedPreferences(PREFS_SESSION, Context.MODE_PRIVATE)
     }
-    val walletManager = remember(context) { SolanaSeekerWalletManager(context) }
+    val walletProvider = remember(context) { SolanaWalletProvider.getInstance(context) }
+    val walletPublicKey by walletProvider.publicKey.collectAsStateWithLifecycle()
 
     var currentUser by remember { mutableStateOf(Firebase.auth.currentUser) }
     // Silent auto-reconnect for Seeker SIWS wallet sessions (zero mandatory Google sign-in)
     var seekerModeActive by remember {
         mutableStateOf(
-            walletManager.hasActiveSession() ||
+            !walletPublicKey.isNullOrBlank() ||
                 sessionPrefs.getBoolean(KEY_GUEST_MODE_ACTIVE, false) ||
-                launchedFromAlarm
+                alarmLaunchEvent != null
         )
+    }
+
+    LaunchedEffect(alarmLaunchEvent?.eventId) {
+        if (alarmLaunchEvent != null && currentUser == null) {
+            seekerModeActive = true
+        }
     }
 
     fun setSeekerMode(active: Boolean) {
@@ -139,37 +168,37 @@ private fun ActakeRoot(
         onDispose { Firebase.auth.removeAuthStateListener(listener) }
     }
 
-    if (currentUser == null && !seekerModeActive) {
-        OnboardingScreen(
-            onSeekerWalletConnected = {
-                setSeekerMode(true)
-            }
-        )
-    } else {
-        val isLocalSeekerMode = currentUser == null
-        val sessionKey = currentUser?.uid
-            ?: walletManager.getSavedSession()?.publicKeyBase58
-            ?: LocalActakeStore.GUEST_UID
-        key(sessionKey, isLocalSeekerMode) {
-            AuthenticatedActakeShell(
-                userId = sessionKey,
-                isGuestMode = isLocalSeekerMode,
-                launchedFromAlarm = launchedFromAlarm,
-                alarmMissionTitle = alarmMissionTitle,
-                alarmSound = alarmSound,
-                onSignedInFromGuest = {
-                    currentUser = Firebase.auth.currentUser
-                    setSeekerMode(false)
-                },
-                onExitGuestMode = {
-                    walletManager.disconnectWallet()
-                    setSeekerMode(false)
-                },
-                onSignedOut = {
-                    currentUser = null
-                    setSeekerMode(walletManager.hasActiveSession())
+    SolanaWalletProviderHost(provider = walletProvider) {
+        if (currentUser == null && !seekerModeActive) {
+            OnboardingScreen(
+                onSeekerWalletConnected = {
+                    setSeekerMode(true)
                 }
             )
+        } else {
+            val isLocalSeekerMode = currentUser == null
+            val sessionKey = currentUser?.uid
+                ?: walletPublicKey
+                ?: LocalActakeStore.GUEST_UID
+            key(sessionKey, isLocalSeekerMode) {
+                AuthenticatedActakeShell(
+                    userId = sessionKey,
+                    isGuestMode = isLocalSeekerMode,
+                    alarmLaunchEvent = alarmLaunchEvent,
+                    onSignedInFromGuest = {
+                        currentUser = Firebase.auth.currentUser
+                        setSeekerMode(false)
+                    },
+                    onExitGuestMode = {
+                        walletProvider.disconnect()
+                        setSeekerMode(false)
+                    },
+                    onSignedOut = {
+                        currentUser = null
+                        setSeekerMode(!walletProvider.currentPublicKeyOrNull().isNullOrBlank())
+                    }
+                )
+            }
         }
     }
 }
@@ -178,9 +207,7 @@ private fun ActakeRoot(
 private fun AuthenticatedActakeShell(
     userId: String,
     isGuestMode: Boolean,
-    launchedFromAlarm: Boolean,
-    alarmMissionTitle: String,
-    alarmSound: String,
+    alarmLaunchEvent: AlarmLaunchEvent?,
     onSignedInFromGuest: () -> Unit,
     onExitGuestMode: () -> Unit,
     onSignedOut: () -> Unit
@@ -203,6 +230,7 @@ private fun AuthenticatedActakeShell(
     val checkinsState by viewModel.checkinsState.collectAsStateWithLifecycle()
     val siwsSession by viewModel.siwsSession.collectAsStateWithLifecycle()
     val activeTarget by viewModel.activeVerificationTarget.collectAsStateWithLifecycle()
+    val ringingAlarmTarget by viewModel.ringingAlarmTarget.collectAsStateWithLifecycle()
     val randomizedTargetState by viewModel.randomizedTargetState.collectAsStateWithLifecycle()
     val verificationState by viewModel.verificationState.collectAsStateWithLifecycle()
     val celebrationReceipt by viewModel.celebrationReceipt.collectAsStateWithLifecycle()
@@ -212,6 +240,7 @@ private fun AuthenticatedActakeShell(
     val solanaDevnetSol by viewModel.solanaDevnetSol.collectAsStateWithLifecycle()
     val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
     val lastChainSync by viewModel.lastChainSync.collectAsStateWithLifecycle()
+    val isAuthorizingPayment by viewModel.isAuthorizingPayment.collectAsStateWithLifecycle()
     val bannerMessage by viewModel.bannerMessage.collectAsStateWithLifecycle()
 
     val profile = (profileState as? DataState.Success)?.data
@@ -232,21 +261,61 @@ private fun AuthenticatedActakeShell(
         viewModel.clearBannerMessage()
     }
 
-    LaunchedEffect(launchedFromAlarm) {
-        if (launchedFromAlarm) {
-            viewModel.prepareVerificationTarget(
+    // System AlarmManager / AlarmReceiver intent opens the ringing Alarm Challenge Pop-up first
+    LaunchedEffect(alarmLaunchEvent?.eventId) {
+        val event = alarmLaunchEvent ?: return@LaunchedEffect
+        val matchedStake = stakes.firstOrNull {
+            it.status == "ACTIVE" && it.title.equals(event.missionTitle, ignoreCase = true)
+        }
+        if (matchedStake != null) {
+            viewModel.triggerAlarmPopupForStake(
+                stake = matchedStake,
+                defaultAlarmSound = event.alarmSound
+            )
+        } else {
+            viewModel.triggerAlarmPopupForTarget(
                 ActiveVerificationTarget(
                     categoryId = "WAKEUP",
                     categoryContextHint = "Everyday morning hygiene and kitchen objects such as a ceramic coffee mug, toothbrush, sink faucet, or curtains",
-                    title = alarmMissionTitle,
+                    title = event.missionTitle,
                     missionType = "OBJECT_SNAP",
-                    targetPrompt = "AI-randomized item from $alarmMissionTitle",
+                    targetPrompt = "AI-randomized item from ${event.missionTitle}",
                     stakeAmount = 15.0,
                     tokenSymbol = "USDC",
-                    alarmSound = alarmSound
+                    alarmSound = event.alarmSound
                 )
             )
-            navController.navigate(ROUTE_ACTIVE_ALARM)
+        }
+    }
+
+    // Real-time foreground alarm watcher: triggers the AI image + description pop-up automatically
+    // the exact minute any active habit stake's scheduled alarm time is reached.
+    LaunchedEffect(stakes, currentRoute, ringingAlarmTarget) {
+        if (currentRoute == ROUTE_ACTIVE_ALARM || ringingAlarmTarget != null) return@LaunchedEffect
+        val activeStakes = stakes.filter { it.status == "ACTIVE" }
+        if (activeStakes.isEmpty()) return@LaunchedEffect
+
+        while (true) {
+            val now = Calendar.getInstance()
+            val hour = now.get(Calendar.HOUR_OF_DAY)
+            val minute = now.get(Calendar.MINUTE)
+            val year = now.get(Calendar.YEAR)
+            val dayOfYear = now.get(Calendar.DAY_OF_YEAR)
+
+            val dueStake = activeStakes.firstOrNull { stake ->
+                stake.wakeHour == hour && stake.wakeMinute == minute
+            }
+            if (dueStake != null) {
+                val occurrenceKey = "$year-$dayOfYear-$hour-$minute-${dueStake.id.ifBlank { dueStake.title }}"
+                if (viewModel.markAlarmOccurrenceTriggered(occurrenceKey)) {
+                    viewModel.triggerAlarmPopupForStake(
+                        stake = dueStake,
+                        defaultAlarmSound = profile?.alarmSound ?: "Siren"
+                    )
+                    break
+                }
+            }
+            delay(1_000L)
         }
     }
 
@@ -278,7 +347,6 @@ private fun AuthenticatedActakeShell(
                     isRefreshing = isRefreshing,
                     lastChainSync = lastChainSync,
                     onRefresh = { viewModel.refreshDashboardFromBlockchain() },
-                    onBuildAgentAttestationJson = { viewModel.buildAgentAttestationJson() },
                     onInitiateNewStake = {
                         navController.navigate(ROUTE_MISSIONS) {
                             popUpTo(ROUTE_HOME) { saveState = true }
@@ -331,6 +399,9 @@ private fun AuthenticatedActakeShell(
             composable(ROUTE_MISSIONS) {
                 MissionsScreen(
                     customCategories = customCategories,
+                    siwsSession = siwsSession,
+                    isAuthorizingPayment = isAuthorizingPayment,
+                    onOpenInstalledMwaWallet = { viewModel.launchInstalledSeekerWallet(context) },
                     onCreateCustomCategory = { name, contextHint ->
                         viewModel.createCustomCategory(name, contextHint)
                     },
@@ -440,6 +511,7 @@ private fun AuthenticatedActakeShell(
                     verificationState = verificationState,
                     strictnessEnabled = profile?.strictnessEnabled ?: false,
                     onRerollTarget = { viewModel.rollRandomizedTargetForActive() },
+                    onRetryPreviewImage = { viewModel.retryReferenceImageGeneration() },
                     onCaptureFrame = { bitmap ->
                         viewModel.verifyCapturedFrame(bitmap) {
                             navController.navigate(ROUTE_CELEBRATION) {
@@ -509,6 +581,24 @@ private fun AuthenticatedActakeShell(
                 containerColor = BgObsidian,
                 contentColor = Color.White,
                 shape = RoundedCornerShape(18.dp)
+            )
+        }
+
+        // Ringing Alarm Pop-up: displays the AI-generated reference image & description first,
+        // then redirects to the live camera when the user clicks "Verify Proof".
+        val activePopupTarget = ringingAlarmTarget
+        if (activePopupTarget != null) {
+            AlarmChallengePopupDialog(
+                target = activePopupTarget,
+                randomizedTargetState = randomizedTargetState,
+                onRetryTarget = { viewModel.rollRandomizedTargetForActive() },
+                onRetryPreviewImage = { viewModel.retryReferenceImageGeneration() },
+                onVerifyProofClick = {
+                    viewModel.proceedFromAlarmPopupToLiveCam()
+                    navController.navigate(ROUTE_ACTIVE_ALARM) {
+                        launchSingleTop = true
+                    }
+                }
             )
         }
     }

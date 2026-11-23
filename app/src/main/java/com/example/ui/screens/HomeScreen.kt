@@ -8,9 +8,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -21,7 +24,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
-import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -92,7 +95,6 @@ fun HomeScreen(
     isRefreshing: Boolean,
     lastChainSync: SolanaChainSyncSnapshot?,
     onRefresh: () -> Unit,
-    onBuildAgentAttestationJson: () -> String,
     onInitiateNewStake: () -> Unit,
     onLaunchLiveVerification: (StakeCommitment) -> Unit,
     onOpenAlarmSettings: () -> Unit,
@@ -154,6 +156,7 @@ fun HomeScreen(
             )
         }
     ) {
+        val navBarBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
@@ -163,7 +166,7 @@ fun HomeScreen(
                 start = 20.dp,
                 end = 20.dp,
                 top = 16.dp,
-                bottom = 124.dp
+                bottom = 118.dp + navBarBottom
             ),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -278,7 +281,6 @@ fun HomeScreen(
             solanaDevnetSol = solanaDevnetSol,
             siwsSession = siwsSession,
             isGuestMode = isGuestMode,
-            onBuildAgentAttestationJson = onBuildAgentAttestationJson,
             onDismiss = { showWalletSheet = false },
             onConnectSeekerWallet = onConnectSeekerWallet,
             onSaveWalletAddress = {
@@ -531,7 +533,7 @@ private fun NextStakeCard(
             )
 
             Text(
-                text = "AI rolls a fresh ${stake.title} target when you tap Snap Proof",
+                text = "Pop-up with AI item image & description opens when your ${stake.title} alarm rings",
                 style = MaterialTheme.typography.bodyMedium,
                 color = TextMuted
             )
@@ -548,30 +550,29 @@ private fun NextStakeCard(
                     modifier = Modifier
                         .weight(1f)
                         .clip(RoundedCornerShape(16.dp))
-                        .background(AccentCoralSoft)
-                        .clickable(onClick = onVerifyNowClick)
+                        .background(BgSurfaceSoft.copy(alpha = 0.7f))
                         .padding(horizontal = 12.dp, vertical = 12.dp)
                         .testTag("home_verify_now_button"),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.CameraAlt,
+                        imageVector = Icons.Filled.Lock,
                         contentDescription = null,
-                        tint = AccentCoral,
-                        modifier = Modifier.size(22.dp)
+                        tint = TextMuted,
+                        modifier = Modifier.size(20.dp)
                     )
                     Column {
                         Text(
-                            text = "Snap Proof",
+                            text = stringResource(R.string.verify_proof_label),
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.Bold,
-                            color = TextPrimary
+                            color = TextMuted
                         )
                         Text(
-                            text = stake.title,
+                            text = stringResource(R.string.verify_proof_locked_hint),
                             style = MaterialTheme.typography.labelSmall,
-                            color = TextMuted,
+                            color = TextMuted.copy(alpha = 0.8f),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )

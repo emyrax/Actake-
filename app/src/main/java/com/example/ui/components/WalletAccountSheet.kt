@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -69,7 +70,6 @@ fun WalletAccountSheet(
     solanaDevnetSol: Double?,
     siwsSession: SiwsSession?,
     isGuestMode: Boolean,
-    onBuildAgentAttestationJson: () -> String,
     onDismiss: () -> Unit,
     onConnectSeekerWallet: () -> Unit,
     onSaveWalletAddress: (String) -> Unit,
@@ -92,6 +92,7 @@ fun WalletAccountSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
+                .imePadding()
                 .navigationBarsPadding()
                 .padding(horizontal = 24.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
@@ -218,7 +219,7 @@ fun WalletAccountSheet(
                 }
             }
 
-            // x402 Machine-to-Machine Agent Attestation Card
+            // Custom Anchor Escrow & Solana Actions / Blinks Card
             Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = BgSurfaceSoft,
@@ -229,31 +230,32 @@ fun WalletAccountSheet(
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Text(
-                        text = "x402 Agent Habit Proof Rail ($0.002 USDC/query)",
+                        text = "Anchor Escrow & Solana Blinks",
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.Bold,
                         color = TextPrimary
                     )
                     Text(
-                        text = "External AI agents (SeekerClaw / OpenClaw) can verify your streak via GET /api/x402/attestation/${walletInput.take(8).ifBlank { "wallet" }}...",
+                        text = "Stakes lock in actake_escrow (SPL Token USDC / Token-2022 SKR 0% fee). Share your Blink link to invite friends to stake in one tap.",
                         style = MaterialTheme.typography.labelSmall,
                         color = TextMuted
                     )
                     OutlinedButton(
                         onClick = {
-                            val payload = onBuildAgentAttestationJson()
+                            val blinkUrl = com.example.solana.ActakeEscrowProgram.buildSquadBlinkUrl("wake-club")
+                            val shareText = "Join my Actake accountability stake on Solana Seeker!\n🔥 Streak: ${profile.streakCount} days • ${profile.actPoints} \$ACT\nTap Blink to stake: $blinkUrl"
                             val shareIntent = Intent(Intent.ACTION_SEND).apply {
                                 type = "text/plain"
-                                putExtra(Intent.EXTRA_SUBJECT, "Actake x402 Agent Attestation")
-                                putExtra(Intent.EXTRA_TEXT, payload)
+                                putExtra(Intent.EXTRA_SUBJECT, "Actake Solana Blink Invite")
+                                putExtra(Intent.EXTRA_TEXT, shareText)
                             }
-                            context.startActivity(Intent.createChooser(shareIntent, "Share x402 Attestation"))
+                            context.startActivity(Intent.createChooser(shareIntent, "Share Solana Blink"))
                         },
                         shape = RoundedCornerShape(50),
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(48.dp)
-                            .testTag("share_x402_attestation_button")
+                            .testTag("share_solana_blink_button")
                     ) {
                         Icon(
                             imageVector = Icons.Filled.Share,
@@ -261,7 +263,7 @@ fun WalletAccountSheet(
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Export Signed x402 Attestation JSON", style = MaterialTheme.typography.labelLarge)
+                        Text("Share Squad Solana Blink", style = MaterialTheme.typography.labelLarge)
                     }
                 }
             }

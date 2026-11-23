@@ -47,9 +47,10 @@ object AlarmScheduler {
                 putExtra(EXTRA_ALARM_SOUND, alarmSound)
             }
 
+            val requestCode = ((missionTitle.hashCode() * 31) + (hour * 60) + minute) and 0x7FFFFFFF
             val pendingIntent = PendingIntent.getBroadcast(
                 context,
-                1001,
+                requestCode,
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
@@ -102,7 +103,9 @@ class AlarmReceiver : BroadcastReceiver() {
         }
 
         val launchIntent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra(EXTRA_ALARM_TRIGGERED, true)
             putExtra(EXTRA_ALARM_MISSION_TITLE, missionTitle)
             putExtra(EXTRA_ALARM_SOUND, alarmSound)

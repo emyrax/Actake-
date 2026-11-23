@@ -22,10 +22,12 @@ import com.example.data.repository.ActakeRepository
 import com.example.data.repository.LocalActakeStore
 import com.example.data.repository.SolanaChainSyncSnapshot
 import com.example.data.repository.VisionOracleRepository
+import com.example.solana.ActakeEscrowProgram
+import com.example.solana.SeekerPaymentReceipt
 import com.example.solana.SiwsSession
 import com.example.solana.SolanaSeekerWalletManager
-import com.example.solana.X402PaymentClient
-import com.example.solana.X402PaymentReceipt
+import com.example.solana.SolanaWalletProvider
+import com.example.solana.SolanaWalletState
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -102,10 +104,12 @@ class ActakeViewModel(
     val isGuestMode: Boolean,
     private val repository: ActakeDataSource,
     private val oracleRepository: VisionOracleRepository,
-    private val walletManager: SolanaSeekerWalletManager
+    val walletProvider: SolanaWalletProvider,
+    private val escrowProgram: ActakeEscrowProgram = ActakeEscrowProgram(walletProvider)
 ) : ViewModel() {
 
-    private val x402Client = X402PaymentClient(walletManager)
+    val walletState: StateFlow<SolanaWalletState> = walletProvider.walletState
+    val walletPublicKey: StateFlow<String?> = walletProvider.publicKey
 
     val profileState: StateFlow<DataState<UserProfile?>> = repository.observeUserProfile()
         .map<UserProfile?, DataState<UserProfile?>> { DataState.Success(it) }
@@ -183,11 +187,17 @@ class ActakeViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), DataState.Success(emptyList()))
 
-    private val _siwsSession = MutableStateFlow(walletManager.getSavedSession())
-    val siwsSession: StateFlow<SiwsSession?> = _siwsSession.asStateFlow()
+    val siwsSession: StateFlow<SiwsSession?> = walletProvider.walletState
+        .map { it.session }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, walletProvider.walletState.value.session)
 
     private val _activeVerificationTarget = MutableStateFlow(ActiveVerificationTarget())
     val activeVerificationTarget: StateFlow<ActiveVerificationTarget> = _activeVerificationTarget.asStateFlow()
+
+    private val _ringingAlarmTarget = MutableStateFlow<ActiveVerificationTarget?>(null)
+    val ringingAlarmTarget: StateFlow<ActiveVerificationTarget?> = _ringingAlarmTarget.asStateFlow()
+
+    private val triggeredAlarmKeys = mutableSetOf<String>()
 
     private val _randomizedTargetState = MutableStateFlow<RandomizedTargetUiState>(RandomizedTargetUiState.Loading)
     val randomizedTargetState: StateFlow<RandomizedTargetUiState> = _randomizedTargetState.asStateFlow()
@@ -200,9 +210,6 @@ class ActakeViewModel(
 
     private val _payoutRedemptionTxSig = MutableStateFlow<String?>(null)
     val payoutRedemptionTxSig: StateFlow<String?> = _payoutRedemptionTxSig.asStateFlow()
-
-    private val _lastX402Receipt = MutableStateFlow<X402PaymentReceipt?>(null)
-    val lastX402Receipt: StateFlow<X402PaymentReceipt?> = _lastX402Receipt.asStateFlow()
 
     private val _gpsTelemetry = MutableStateFlow(LiveGpsTelemetry())
     val gpsTelemetry: StateFlow<LiveGpsTelemetry> = _gpsTelemetry.asStateFlow()
@@ -219,12 +226,19 @@ class ActakeViewModel(
     private val _lastChainSync = MutableStateFlow<SolanaChainSyncSnapshot?>(null)
     val lastChainSync: StateFlow<SolanaChainSyncSnapshot?> = _lastChainSync.asStateFlow()
 
+    private val _isAuthorizingPayment = MutableStateFlow(false)
+    val isAuthorizingPayment: StateFlow<Boolean> = _isAuthorizingPayment.asStateFlow()
+
+    private val _lastPaymentReceipt = MutableStateFlow<SeekerPaymentReceipt?>(null)
+    val lastPaymentReceipt: StateFlow<SeekerPaymentReceipt?> = _lastPaymentReceipt.asStateFlow()
+
     private val _bannerMessage = MutableStateFlow<String?>(null)
     val bannerMessage: StateFlow<String?> = _bannerMessage.asStateFlow()
 
     init {
         viewModelScope.launch {
-            val savedPubkey = walletManager.getSavedSession()?.publicKeyBase58.orEmpty()
+            val savedPubkey = walletProvider.reconnectSilently()?.publicKeyBase58
+                ?: walletProvider.currentPublicKeyOrNull().orEmpty()
             val result = repository.ensureStarterProfileAndData(initialWalletAddress = savedPubkey)
             result.onFailure { err ->
                 _bannerMessage.value = err.localizedMessage ?: "Could not initialize profile."
@@ -240,7 +254,7 @@ class ActakeViewModel(
         viewModelScope.launch {
             profileState.collect { state ->
                 val profileAddr = (state as? DataState.Success)?.data?.walletAddress.orEmpty()
-                val address = profileAddr.ifBlank { _siwsSession.value?.publicKeyBase58.orEmpty() }
+                val address = profileAddr.ifBlank { walletProvider.currentPublicKeyOrNull().orEmpty() }
                 if (address.length in 32..44) {
                     oracleRepository.fetchSolanaDevnetBalanceSol(address)
                         .onSuccess { _solanaDevnetSol.value = it }
@@ -263,8 +277,8 @@ class ActakeViewModel(
         if (_isRefreshing.value) return
         val profile = (profileState.value as? DataState.Success)?.data
         val walletAddress = profile?.walletAddress?.ifBlank {
-            _siwsSession.value?.publicKeyBase58.orEmpty()
-        } ?: _siwsSession.value?.publicKeyBase58.orEmpty()
+            walletProvider.currentPublicKeyOrNull().orEmpty()
+        } ?: walletProvider.currentPublicKeyOrNull().orEmpty()
 
         viewModelScope.launch {
             _isRefreshing.value = true
@@ -342,6 +356,13 @@ class ActakeViewModel(
     }
 
     fun prepareVerificationFromStake(stake: StakeCommitment, defaultAlarmSound: String) {
+        prepareVerificationTarget(buildVerificationTargetFromStake(stake, defaultAlarmSound))
+    }
+
+    private fun buildVerificationTargetFromStake(
+        stake: StakeCommitment,
+        defaultAlarmSound: String
+    ): ActiveVerificationTarget {
         val builtIn = DefaultHabitCategories.firstOrNull {
             it.id.equals(stake.categoryId, ignoreCase = true)
         }
@@ -349,21 +370,51 @@ class ActakeViewModel(
         val contextHint = stake.categoryContextHint.ifBlank {
             builtIn?.contextHint ?: stake.targetPrompt
         }
-        prepareVerificationTarget(
-            ActiveVerificationTarget(
-                stakeId = stake.id,
-                squadId = stake.squadId.ifBlank { _selectedSquadId.value.orEmpty() },
-                categoryId = stake.categoryId.ifBlank { "WAKEUP" },
-                categoryContextHint = contextHint,
-                isCustomCategory = isCustom,
-                title = stake.title,
-                missionType = stake.missionType,
-                targetPrompt = stake.targetPrompt,
-                stakeAmount = stake.stakeAmount,
-                tokenSymbol = stake.tokenSymbol,
-                alarmSound = stake.alarmSound.ifBlank { defaultAlarmSound }
-            )
+        return ActiveVerificationTarget(
+            stakeId = stake.id,
+            squadId = stake.squadId.ifBlank { _selectedSquadId.value.orEmpty() },
+            categoryId = stake.categoryId.ifBlank { "WAKEUP" },
+            categoryContextHint = contextHint,
+            isCustomCategory = isCustom,
+            title = stake.title,
+            missionType = stake.missionType,
+            targetPrompt = stake.targetPrompt,
+            stakeAmount = stake.stakeAmount,
+            tokenSymbol = stake.tokenSymbol,
+            alarmSound = stake.alarmSound.ifBlank { defaultAlarmSound }
         )
+    }
+
+    /**
+     * Records an alarm occurrence key (`yyyy-MM-dd-HH-mm-stakeId`) and returns true only the
+     * first time that occurrence fires so the pop-up never re-triggers during the same minute.
+     */
+    fun markAlarmOccurrenceTriggered(occurrenceKey: String): Boolean {
+        return synchronized(triggeredAlarmKeys) {
+            triggeredAlarmKeys.add(occurrenceKey)
+        }
+    }
+
+    /**
+     * Opens the ringing alarm pop-up showing the randomized AI item image & description.
+     * The user must click "Verify Proof" in the pop-up to redirect to the live camera.
+     */
+    fun triggerAlarmPopupForStake(stake: StakeCommitment, defaultAlarmSound: String) {
+        val target = buildVerificationTargetFromStake(stake, defaultAlarmSound)
+        triggerAlarmPopupForTarget(target)
+    }
+
+    fun triggerAlarmPopupForTarget(target: ActiveVerificationTarget) {
+        _ringingAlarmTarget.value = target
+        prepareVerificationTarget(target)
+    }
+
+    /**
+     * Dismisses the alarm pop-up while preserving the exact [activeVerificationTarget] and
+     * [randomizedTargetState] so the live camera verifies the initially displayed item.
+     */
+    fun proceedFromAlarmPopupToLiveCam() {
+        _ringingAlarmTarget.value = null
     }
 
     fun prepareVerificationFromGeoHunt(zone: GeoHuntCheckpoint, distanceMeters: Double?) {
@@ -388,9 +439,11 @@ class ActakeViewModel(
     }
 
     /**
-     * Anti-Cheat AI Target Randomizer: rolls a fresh physical object from the stake's broad category
-     * via `gemini-3.8-flash` (avoiding the user's last 7 verified items), and if it's a Custom Category
-     * generates a clean studio reference image via `gemini-nano-banana-2.1`.
+     * Anti-Cheat AI Target Randomizer + Runtime Visual Reference Generator:
+     * 1. Rolls a fresh everyday physical object & capture description via `gemini-3.8-flash`
+     *    matching the habit category while avoiding the user's last 7 verified objects.
+     * 2. Synthesizes a fresh studio reference image of that exact randomized object via
+     *    `gemini-nano-banana-2.1` for EVERY alarm/habit case (Wakeup, Reading, Gym, Outdoors, Custom).
      */
     fun rollRandomizedTargetForActive() {
         val target = _activeVerificationTarget.value
@@ -399,6 +452,7 @@ class ActakeViewModel(
         viewModelScope.launch {
             _randomizedTargetState.value = RandomizedTargetUiState.Loading
             try {
+                // Step 1: Generate randomized object & actionable capture description
                 val randomized = oracleRepository.generateRandomizedTarget(
                     categoryTitle = target.title,
                     categoryContextHint = target.categoryContextHint,
@@ -406,53 +460,69 @@ class ActakeViewModel(
                     recentVerifiedObjects = recentObjects
                 )
 
-                val needsCustomImage = target.isCustomCategory || randomized.presetAssetKey == "custom"
                 _randomizedTargetState.value = RandomizedTargetUiState.Ready(
                     target = randomized,
                     generatedPreviewBitmap = null,
-                    isGeneratingCustomPreview = needsCustomImage,
+                    isGeneratingCustomPreview = true,
                     customPreviewError = null
                 )
 
-                if (needsCustomImage) {
-                    launch {
-                        try {
-                            val bmp = oracleRepository.generateReferencePreviewBitmap(
-                                randomized.referenceImagePrompt
-                            )
-                            val latest = _randomizedTargetState.value
-                            if (latest is RandomizedTargetUiState.Ready &&
-                                latest.target.targetObject == randomized.targetObject
-                            ) {
-                                _randomizedTargetState.value = latest.copy(
-                                    generatedPreviewBitmap = bmp,
-                                    isGeneratingCustomPreview = false,
-                                    customPreviewError = null
-                                )
-                            }
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Custom reference preview generation failed", e)
-                            val latest = _randomizedTargetState.value
-                            if (latest is RandomizedTargetUiState.Ready &&
-                                latest.target.targetObject == randomized.targetObject
-                            ) {
-                                _randomizedTargetState.value = latest.copy(
-                                    generatedPreviewBitmap = null,
-                                    isGeneratingCustomPreview = false,
-                                    customPreviewError = e.localizedMessage ?: "Preview image unavailable"
-                                )
-                            }
-                        }
-                    }
-                }
+                // Step 2: Always generate a fresh AI reference image via gemini-nano-banana-2.1
+                generateReferenceImageForTarget(randomized)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 Log.e(TAG, "AI target randomization failed", e)
                 _randomizedTargetState.value = RandomizedTargetUiState.Error(
                     e.localizedMessage ?: "Could not roll randomized target. Tap Retry."
+                )
+            }
+        }
+    }
+
+    /**
+     * Retries AI reference image synthesis (`gemini-nano-banana-2.1`) for the current randomized target.
+     */
+    fun retryReferenceImageGeneration() {
+        val current = _randomizedTargetState.value as? RandomizedTargetUiState.Ready ?: return
+        if (current.isGeneratingCustomPreview) return
+        _randomizedTargetState.value = current.copy(
+            generatedPreviewBitmap = null,
+            isGeneratingCustomPreview = true,
+            customPreviewError = null
+        )
+        viewModelScope.launch {
+            generateReferenceImageForTarget(current.target)
+        }
+    }
+
+    private suspend fun generateReferenceImageForTarget(randomized: RandomizedTargetPrompt) {
+        try {
+            val bmp = oracleRepository.generateReferencePreviewBitmap(
+                randomized.referenceImagePrompt
+            )
+            val latest = _randomizedTargetState.value
+            if (latest is RandomizedTargetUiState.Ready &&
+                latest.target.targetObject == randomized.targetObject
+            ) {
+                _randomizedTargetState.value = latest.copy(
+                    generatedPreviewBitmap = bmp,
+                    isGeneratingCustomPreview = false,
+                    customPreviewError = null
+                )
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "AI reference preview image generation failed", e)
+            val latest = _randomizedTargetState.value
+            if (latest is RandomizedTargetUiState.Ready &&
+                latest.target.targetObject == randomized.targetObject
+            ) {
+                _randomizedTargetState.value = latest.copy(
+                    generatedPreviewBitmap = null,
+                    isGeneratingCustomPreview = false,
+                    customPreviewError = e.localizedMessage ?: "AI image generation failed. Tap to retry."
                 )
             }
         }
@@ -467,7 +537,9 @@ class ActakeViewModel(
         onVerifiedNavigateToCelebration: () -> Unit
     ) {
         val target = _activeVerificationTarget.value
-        val randomized = (_randomizedTargetState.value as? RandomizedTargetUiState.Ready)?.target
+        val readyState = _randomizedTargetState.value as? RandomizedTargetUiState.Ready
+        val randomized = readyState?.target
+        val initialReferenceBitmap = readyState?.generatedPreviewBitmap
         val activeTargetLabel = randomized?.targetObject ?: target.title
         val activeTargetPrompt = if (randomized != null) {
             "${randomized.targetObject}. ${randomized.visualCue}. Anti-cheat: ${randomized.antiCheatRule}"
@@ -485,15 +557,10 @@ class ActakeViewModel(
 
         viewModelScope.launch {
             _verificationState.value = VerificationUiState.Scanning(
-                if (isSkrBoosted) "Settling 0-fee SKR x402 rail & scanning..."
-                else "Settling $0.005 USDC x402 voucher & scanning..."
+                "Inspecting live camera proof with Gemini Vision AI..."
             )
             try {
-                // Step 1: Settle x402 HTTP 402 payment rail (0-fee SKR sponsor or signed micro-voucher)
-                val x402Receipt = x402Client.settleVerifyCheckinRail(isSkrBoosted = isSkrBoosted)
-                _lastX402Receipt.value = x402Receipt
-
-                // Step 2: Gemini Vision AI real-world liveness & randomized-target verification
+                // Step 1: Gemini Vision AI real-world liveness & match against initially displayed item
                 val result = oracleRepository.verifyLivePhoto(
                     bitmap = bitmap,
                     missionType = target.missionType,
@@ -501,7 +568,8 @@ class ActakeViewModel(
                     poolId = matchedSquad?.id?.ifBlank { "solo_pool" } ?: "solo_pool",
                     userId = userId,
                     distanceMeters = target.distanceMeters,
-                    maxRadiusMeters = target.maxRadiusMeters
+                    maxRadiusMeters = target.maxRadiusMeters,
+                    referenceBitmap = initialReferenceBitmap
                 )
 
                 val confidencePct = (result.confidence * 100).toInt().coerceIn(0, 100)
@@ -516,6 +584,17 @@ class ActakeViewModel(
                 _verificationState.value = VerificationUiState.VerifyingOracle(
                     detectedLabel = result.detectedObject,
                     confidencePct = confidencePct
+                )
+
+                // Step 2: Submit signed `actake_escrow::submit_checkin` with live blockhash & Ed25519 proof
+                val recentBlockhash = oracleRepository.fetchLatestSolanaBlockhash()
+                    .getOrElse { "devnet-offline-${System.currentTimeMillis().toString(16)}" }
+                val checkinTx = escrowProgram.submitCheckin(
+                    categoryId = target.categoryId,
+                    missionTitle = target.title,
+                    proofHashHex = result.proofHashHex,
+                    oracleSignatureHex = result.oracleSignatureHex,
+                    recentBlockhash = recentBlockhash
                 )
 
                 // Step 3: Award $ACT Points + unlock stake & split bonus
@@ -543,6 +622,7 @@ class ActakeViewModel(
                     return@launch
                 }
 
+                val tokenConfig = ActakeEscrowProgram.tokenConfigFor(target.tokenSymbol)
                 val nowTimeLabel = SimpleDateFormat("hh:mm a", Locale.US).format(Date())
                 _celebrationReceipt.value = CelebrationReceipt(
                     verifiedTimeLabel = nowTimeLabel,
@@ -551,7 +631,7 @@ class ActakeViewModel(
                     stakeReturned = target.stakeAmount,
                     splitBonus = splitBonus,
                     totalEarned = target.stakeAmount + splitBonus,
-                    tokenSymbol = target.tokenSymbol,
+                    tokenSymbol = tokenConfig.symbol,
                     settlementMs = result.settlementMs,
                     missionTitle = target.title,
                     proofHashHex = result.proofHashHex,
@@ -559,9 +639,9 @@ class ActakeViewModel(
                     squadId = matchedSquad?.id.orEmpty(),
                     pointsEarned = pointsAwarded,
                     verifiedTargetObject = activeTargetLabel,
-                    x402FeeUsdc = x402Receipt.feeUsdc,
-                    x402Sponsored = x402Receipt.sponsoredBySkr,
-                    x402Header = x402Receipt.xPaymentHeader
+                    escrowTxSignature = checkinTx.txSignatureBase58,
+                    tokenStandardLabel = tokenConfig.standardLabel,
+                    skrZeroFee = tokenConfig.isZeroFeePerk
                 )
                 _verificationState.value = VerificationUiState.Ready
                 onVerifiedNavigateToCelebration()
@@ -578,15 +658,21 @@ class ActakeViewModel(
 
     fun redeemPayoutToSeekerWallet() {
         val receipt = _celebrationReceipt.value ?: return
-        val (walletPubkey, txSig) = walletManager.signPayoutClaim(
-            missionTitle = receipt.missionTitle,
-            amount = receipt.totalEarned,
-            tokenSymbol = receipt.tokenSymbol,
-            proofHashHex = receipt.proofHashHex
-        )
-        _siwsSession.value = walletManager.getSavedSession()
-        _payoutRedemptionTxSig.value = txSig
-        _bannerMessage.value = "Redeemed +$${"%.2f".format(Locale.US, receipt.totalEarned)} ${receipt.tokenSymbol} to ${SolanaSeekerWalletManager.shortenAddress(walletPubkey)}"
+        val categoryId = _activeVerificationTarget.value.categoryId
+        viewModelScope.launch {
+            val blockhash = oracleRepository.fetchLatestSolanaBlockhash()
+                .getOrElse { "devnet-offline-${System.currentTimeMillis().toString(16)}" }
+            val claimReceipt = escrowProgram.claimPayout(
+                categoryId = categoryId,
+                missionTitle = receipt.missionTitle,
+                amount = receipt.totalEarned,
+                tokenSymbol = receipt.tokenSymbol,
+                proofHashHex = receipt.proofHashHex,
+                recentBlockhash = blockhash
+            )
+            _payoutRedemptionTxSig.value = claimReceipt.txSignatureBase58
+            _bannerMessage.value = "Claimed +$${"%.2f".format(Locale.US, claimReceipt.amount)} ${claimReceipt.tokenSymbol} via actake_escrow::claim_payout to ${SolanaSeekerWalletManager.shortenAddress(claimReceipt.walletAddress)}"
+        }
     }
 
     fun createCustomCategory(
@@ -606,6 +692,14 @@ class ActakeViewModel(
         }
     }
 
+    fun launchInstalledSeekerWallet(context: Context): Boolean {
+        val launched = walletProvider.launchMwaWalletIfInstalled(context)
+        if (!launched) {
+            _bannerMessage.value = "Using built-in Seeker Seed Vault signer (no external MWA app installed)"
+        }
+        return launched
+    }
+
     fun lockNewStake(
         title: String,
         categoryId: String,
@@ -619,38 +713,61 @@ class ActakeViewModel(
         durationDays: Int,
         onComplete: () -> Unit = {}
     ) {
+        if (_isAuthorizingPayment.value) return
         val profile = (profileState.value as? DataState.Success)?.data
         val alarmSound = profile?.alarmSound ?: "Siren"
         val linkedSquadId = if (mode == "SQUAD") _selectedSquadId.value.orEmpty() else ""
+        val isSkrBoosted = tokenSymbol.equals("SKR", ignoreCase = true)
 
         viewModelScope.launch {
-            repository.createStake(
-                title = title,
-                categoryId = categoryId,
-                categoryContextHint = categoryContextHint,
-                missionType = missionType,
-                mode = mode,
-                targetPrompt = "AI-randomized item from $title",
-                stakeAmount = stakeAmount,
-                tokenSymbol = tokenSymbol,
-                wakeHour = wakeHour,
-                wakeMinute = wakeMinute,
-                durationDays = durationDays,
-                alarmSound = alarmSound,
-                squadId = linkedSquadId
-            ).onSuccess {
-                AlarmScheduler.scheduleDailyWakeAlarm(
-                    context = appContext,
-                    hour = wakeHour,
-                    minute = wakeMinute,
-                    missionTitle = title,
-                    alarmSound = alarmSound
+            _isAuthorizingPayment.value = true
+            try {
+                // Step 1: Fetch live confirmed Solana Devnet recent blockhash
+                val blockhash = oracleRepository.fetchLatestSolanaBlockhash()
+                    .getOrElse { "devnet-offline-${System.currentTimeMillis().toString(16)}" }
+
+                // Step 2: Authorize & sign `actake_escrow::join_pool` via Seeker MWA / Seed Vault
+                val paymentReceipt = escrowProgram.joinPool(
+                    title = title,
+                    categoryId = categoryId,
+                    amount = stakeAmount,
+                    tokenSymbol = tokenSymbol,
+                    recentBlockhash = blockhash
                 )
-                val wakeLabel = ActakeRepository.formatWakeTime(wakeHour, wakeMinute)
-                _bannerMessage.value = "Locked $${"%.2f".format(Locale.US, stakeAmount)} $tokenSymbol for $title ($wakeLabel)"
-                onComplete()
-            }.onFailure { err ->
-                _bannerMessage.value = err.localizedMessage ?: "Could not create stake."
+                _lastPaymentReceipt.value = paymentReceipt
+
+                // Step 3: Persist active stake & arm exact daily wake alarm
+                repository.createStake(
+                    title = title,
+                    categoryId = categoryId,
+                    categoryContextHint = categoryContextHint,
+                    missionType = missionType,
+                    mode = mode,
+                    targetPrompt = "AI-randomized item from $title",
+                    stakeAmount = stakeAmount,
+                    tokenSymbol = tokenSymbol,
+                    wakeHour = wakeHour,
+                    wakeMinute = wakeMinute,
+                    durationDays = durationDays,
+                    alarmSound = alarmSound,
+                    squadId = linkedSquadId
+                ).onSuccess {
+                    AlarmScheduler.scheduleDailyWakeAlarm(
+                        context = appContext,
+                        hour = wakeHour,
+                        minute = wakeMinute,
+                        missionTitle = title,
+                        alarmSound = alarmSound
+                    )
+                    val wakeLabel = ActakeRepository.formatWakeTime(wakeHour, wakeMinute)
+                    val feeLabel = if (isSkrBoosted) "0% SKR Fee" else "SPL Token"
+                    _bannerMessage.value = "Locked $${"%.2f".format(Locale.US, stakeAmount)} $tokenSymbol ($feeLabel) • actake_escrow Tx ${paymentReceipt.txSignatureBase58.take(10)}... • Alarm $wakeLabel"
+                    onComplete()
+                }.onFailure { err ->
+                    _bannerMessage.value = err.localizedMessage ?: "Could not create stake."
+                }
+            } finally {
+                _isAuthorizingPayment.value = false
             }
         }
     }
@@ -733,9 +850,15 @@ class ActakeViewModel(
     }
 
     fun connectOrRefreshSeekerWallet() {
-        val session = walletManager.signInWithSolana()
-        _siwsSession.value = session
-        saveSolanaWalletAddress(session.publicKeyBase58)
+        viewModelScope.launch {
+            walletProvider.signInWithSolana()
+                .onSuccess { session ->
+                    saveSolanaWalletAddress(session.publicKeyBase58)
+                }
+                .onFailure { err ->
+                    _bannerMessage.value = err.localizedMessage ?: "Failed to authorize Solana Seeker wallet."
+                }
+        }
     }
 
     fun saveSolanaWalletAddress(address: String) {
@@ -762,18 +885,6 @@ class ActakeViewModel(
         }
     }
 
-    fun buildAgentAttestationJson(): String {
-        val profile = (profileState.value as? DataState.Success)?.data
-        val wallet = profile?.walletAddress?.ifBlank { _siwsSession.value?.publicKeyBase58.orEmpty() }
-            ?: _siwsSession.value?.publicKeyBase58.orEmpty()
-        return x402Client.buildAgentAttestationJson(
-            walletAddress = wallet,
-            streakCount = profile?.streakCount ?: 1,
-            actPoints = profile?.actPoints ?: 150,
-            recentVerifiedObject = profile?.recentVerifiedObjects?.lastOrNull().orEmpty()
-        )
-    }
-
     class Factory(
         private val context: Context,
         private val userId: String,
@@ -787,13 +898,15 @@ class ActakeViewModel(
             } else {
                 ActakeRepository(appCtx)
             }
+            val provider = SolanaWalletProvider.getInstance(appCtx)
             return ActakeViewModel(
                 appContext = appCtx,
                 userId = userId,
                 isGuestMode = isGuestMode,
                 repository = dataSource,
                 oracleRepository = VisionOracleRepository(),
-                walletManager = SolanaSeekerWalletManager(appCtx)
+                walletProvider = provider,
+                escrowProgram = ActakeEscrowProgram(provider)
             ) as T
         }
     }

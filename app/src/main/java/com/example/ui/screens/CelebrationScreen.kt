@@ -78,11 +78,12 @@ fun CelebrationScreen(
     fun shareProofBlink() {
         val poolSegment = receipt.squadId.ifBlank { "wake-club" }
         val verifiedItem = receipt.verifiedTargetObject.ifBlank { receipt.missionTitle }
+        val blinkUrl = com.example.solana.ActakeEscrowProgram.buildSquadBlinkUrl(poolSegment)
         val shareText = buildString {
             append("✅ Verified $verifiedItem (${receipt.missionTitle}) at ${receipt.verifiedTimeLabel} on Actake!\n")
             append("🔥 ${receipt.streakCount} day streak • +${receipt.pointsEarned} \$ACT • +$${"%.2f".format(Locale.US, receipt.totalEarned)} ${receipt.tokenSymbol}\n")
             append("Proof SHA-256: ${receipt.proofHashHex.take(16)}...\n")
-            append("Join my squad Blink: https://actake.app/api/actions/join/$poolSegment")
+            append("Join my squad Blink: $blinkUrl")
         }
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
@@ -261,7 +262,7 @@ fun CelebrationScreen(
                 }
             }
 
-            // Translucent Glass Payout & x402 Settlement Receipt Card
+            // Translucent Glass Anchor Escrow & SPL Token Settlement Receipt Card
             Surface(
                 shape = RoundedCornerShape(22.dp),
                 color = Color.White.copy(alpha = 0.16f),
@@ -296,7 +297,7 @@ fun CelebrationScreen(
                     Text(
                         text = String.format(
                             Locale.US,
-                            "$%.2f Stake Returned + $%.2f Split • Settled in %dms",
+                            "$%.2f Stake Returned + $%.2f Split • Verified in %dms",
                             receipt.stakeReturned,
                             receipt.splitBonus,
                             receipt.settlementMs
@@ -308,7 +309,7 @@ fun CelebrationScreen(
                         textAlign = TextAlign.Center
                     )
 
-                    // x402 Rail Settlement Pill
+                    // Anchor Escrow & SPL Token / Token-2022 Pill
                     Surface(
                         shape = RoundedCornerShape(50),
                         color = Color.Black.copy(alpha = 0.24f)
@@ -325,14 +326,10 @@ fun CelebrationScreen(
                                 modifier = Modifier.size(14.dp)
                             )
                             Text(
-                                text = if (receipt.x402Sponsored) {
-                                    "x402 Sponsored • $0.00 (SKR 0% Fee)"
+                                text = if (receipt.skrZeroFee) {
+                                    "actake_escrow • SKR Token-2022 (0% Fee)"
                                 } else {
-                                    String.format(
-                                        Locale.US,
-                                        "x402 Settled • $%.3f USDC Micro-Rail",
-                                        receipt.x402FeeUsdc
-                                    )
+                                    "actake_escrow • ${receipt.tokenStandardLabel} (${receipt.tokenSymbol})"
                                 },
                                 style = MaterialTheme.typography.labelSmall.copy(
                                     fontFeatureSettings = "tnum"
@@ -341,6 +338,15 @@ fun CelebrationScreen(
                                 fontWeight = FontWeight.SemiBold
                             )
                         }
+                    }
+
+                    if (receipt.escrowTxSignature.isNotBlank()) {
+                        Text(
+                            text = "submit_checkin Tx: ${receipt.escrowTxSignature.take(18)}...",
+                            fontFamily = MonoFontFamily,
+                            fontSize = 11.sp,
+                            color = Color.White.copy(alpha = 0.80f)
+                        )
                     }
 
                     if (receipt.proofHashHex.isNotBlank()) {

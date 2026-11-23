@@ -43,13 +43,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -61,9 +61,11 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
+import com.example.solana.LocalSolanaWalletProvider
 import com.example.solana.SiwsSession
-import com.example.solana.SolanaSeekerWalletManager
+import kotlinx.coroutines.launch
 import com.example.ui.components.ActakeMascotImage
 import com.example.ui.components.ActakeWordmark
 import com.example.ui.theme.AccentCoral
@@ -89,17 +91,20 @@ import kotlin.math.roundToInt
 fun OnboardingScreen(
     onSeekerWalletConnected: (SiwsSession) -> Unit
 ) {
-    val context = LocalContext.current
-    val walletManager = remember(context) { SolanaSeekerWalletManager(context) }
-    val mwaDetected = remember(walletManager) { walletManager.isMwaWalletInstalled() }
-    var isConnecting by remember { mutableStateOf(false) }
+    val walletProvider = LocalSolanaWalletProvider.current
+    val walletState by walletProvider.walletState.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+    val mwaDetected = walletState.mwaWalletInstalled
+    val isConnecting = walletState.isConnecting
 
     fun performSiwsConnect() {
         if (isConnecting) return
-        isConnecting = true
-        val session = walletManager.signInWithSolana()
-        isConnecting = false
-        onSeekerWalletConnected(session)
+        scope.launch {
+            walletProvider.connectAndSignIn()
+                .onSuccess { session ->
+                    onSeekerWalletConnected(session)
+                }
+        }
     }
 
     Box(
