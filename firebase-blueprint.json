@@ -1,0 +1,205 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated Actake user profile, balances, streak bitmap, Solana Seeker wallet address, and alarm strictness preferences.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID of the owner." },
+        "displayName": { "type": "string", "description": "Display name shown in squad check-ins." },
+        "walletAddress": { "type": "string", "description": "Solana Seeker / SIWS public key." },
+        "streakCount": { "type": "integer", "description": "Current verified daily streak count." },
+        "actPoints": { "type": "integer", "description": "Accumulated $ACT points redeemable for perks." },
+        "recentVerifiedObjects": { "type": "array", "description": "Last 7 AI-verified objects to prevent repeat prompts." },
+        "usdcBalance": { "type": "number", "description": "Available USDC balance for staking." },
+        "skrBalance": { "type": "number", "description": "Available SKR balance for 0% fee staking." },
+        "lockedBalance": { "type": "number", "description": "Total USDC/SKR currently locked in active stakes." },
+        "weekBitmap": { "type": "integer", "description": "7-bit mask tracking verified days Sun..Sat." },
+        "alarmSound": { "type": "string", "enum": ["Siren", "Mayhem", "Rooster", "Baby Crying", "Buzzer"] },
+        "strictnessEnabled": { "type": "boolean", "description": "Disables snooze and enables auto-slash countdown." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp written via FieldValue.serverTimestamp()." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp written via FieldValue.serverTimestamp()." }
+      },
+      "required": [
+        "userId",
+        "displayName",
+        "streakCount",
+        "usdcBalance",
+        "skrBalance",
+        "lockedBalance",
+        "weekBitmap",
+        "alarmSound",
+        "strictnessEnabled",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StakeCommitment": {
+      "title": "StakeCommitment",
+      "description": "User-owned habit commitment or wake-up alarm stake backed by Vision AI verification.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner UID." },
+        "title": { "type": "string", "description": "Habit category title such as Morning Wakeup." },
+        "categoryId": { "type": "string", "description": "Broad habit category ID (WAKEUP, READING, GYM, OUTDOORS, HYDRATION, or custom)." },
+        "categoryContextHint": { "type": "string", "description": "Category context passed to AI target randomizer." },
+        "missionType": { "type": "string", "enum": ["OBJECT_SNAP", "POSE_REP", "GEO_HUNT"] },
+        "mode": { "type": "string", "enum": ["SOLO", "SQUAD", "GPS_HUNT"] },
+        "targetPrompt": { "type": "string", "description": "Prompt sent to Gemini Vision AI anti-spoof verifier." },
+        "stakeAmount": { "type": "number", "description": "Escrowed stake amount." },
+        "tokenSymbol": { "type": "string", "enum": ["USDC", "SKR"] },
+        "skrBoosted": { "type": "boolean", "description": "True when staked in SKR for 0% protocol fee." },
+        "wakeTimeLabel": { "type": "string", "description": "Formatted wake time such as 06:00 AM." },
+        "wakeHour": { "type": "integer", "description": "24-hour wake hour." },
+        "wakeMinute": { "type": "integer", "description": "Wake minute." },
+        "durationDays": { "type": "integer", "description": "Commitment duration in days." },
+        "completedDays": { "type": "integer", "description": "Verified days completed." },
+        "alarmSound": { "type": "string", "enum": ["Siren", "Mayhem", "Rooster", "Baby Crying", "Buzzer"] },
+        "status": { "type": "string", "enum": ["ACTIVE", "COMPLETED", "SLASHED"] },
+        "squadId": { "type": "string", "description": "Optional linked squad pool document ID." },
+        "proofHash": { "type": "string", "description": "SHA-256 hash of verified proof." },
+        "oracleSignature": { "type": "string", "description": "Ed25519/ECDSA attestation signature hex." },
+        "earnedAmount": { "type": "number", "description": "Total USDC or SKR successfully earned upon completion." },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "userId",
+        "title",
+        "missionType",
+        "mode",
+        "targetPrompt",
+        "stakeAmount",
+        "tokenSymbol",
+        "skrBoosted",
+        "wakeTimeLabel",
+        "wakeHour",
+        "wakeMinute",
+        "durationDays",
+        "completedDays",
+        "alarmSound",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SquadPool": {
+      "title": "SquadPool",
+      "description": "Shared accountability pool with pot tracking, member UIDs, and Solana Blink invite metadata.",
+      "type": "object",
+      "properties": {
+        "creatorId": { "type": "string", "description": "Creator Firebase Auth UID." },
+        "name": { "type": "string", "description": "Squad pool title." },
+        "wakeTimeLabel": { "type": "string", "description": "Target check-in deadline." },
+        "missionTitle": { "type": "string", "description": "Primary verification mission." },
+        "stakeAmount": { "type": "number", "description": "Per-member stake requirement." },
+        "tokenSymbol": { "type": "string", "enum": ["USDC", "SKR"] },
+        "potAmount": { "type": "number", "description": "Total pooled stake value." },
+        "slashedAmount": { "type": "number", "description": "Slashed stake value distributed to winners." },
+        "participantCount": { "type": "integer", "description": "Total joined participants." },
+        "checkedInCount": { "type": "integer", "description": "Participants verified today." },
+        "memberUids": { "type": "array", "description": "Bounded list of member UIDs (max 50)." },
+        "joinable": { "type": "boolean", "description": "Whether invited users can join by squad ID." },
+        "status": { "type": "string", "enum": ["ACTIVE", "SETTLED"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "creatorId",
+        "name",
+        "wakeTimeLabel",
+        "missionTitle",
+        "stakeAmount",
+        "tokenSymbol",
+        "potAmount",
+        "slashedAmount",
+        "participantCount",
+        "checkedInCount",
+        "memberUids",
+        "joinable",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SquadCheckin": {
+      "title": "SquadCheckin",
+      "description": "Verified check-in proof card posted inside a squad pool with Vision AI confidence and reactions.",
+      "type": "object",
+      "properties": {
+        "squadId": { "type": "string", "description": "Parent squad pool ID." },
+        "userId": { "type": "string", "description": "Author Firebase Auth UID." },
+        "memberUids": { "type": "array", "description": "Denormalized squad member UIDs for rule-enforced list queries." },
+        "userName": { "type": "string", "description": "Author display name." },
+        "missionTitle": { "type": "string", "description": "Verified mission title." },
+        "verifiedTimeLabel": { "type": "string", "description": "Formatted check-in time." },
+        "streakCount": { "type": "integer", "description": "Author streak at check-in time." },
+        "status": { "type": "string", "enum": ["VERIFIED", "MISSED"] },
+        "aiConfidence": { "type": "number", "description": "Vision AI confidence score 0..1." },
+        "aiReason": { "type": "string", "description": "Vision AI verifier summary." },
+        "proofHash": { "type": "string", "description": "SHA-256 proof digest." },
+        "oracleSignature": { "type": "string", "description": "Attestation signature hex." },
+        "payoutEarned": { "type": "number", "description": "Estimated or claimed payout." },
+        "thumbsCount": { "type": "integer", "description": "Thumbs up reactions count." },
+        "fireCount": { "type": "integer", "description": "Fire reactions count." },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "squadId",
+        "userId",
+        "memberUids",
+        "userName",
+        "missionTitle",
+        "verifiedTimeLabel",
+        "streakCount",
+        "status",
+        "aiConfidence",
+        "aiReason",
+        "proofHash",
+        "oracleSignature",
+        "payoutEarned",
+        "thumbsCount",
+        "fireCount",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CustomCategory": {
+      "title": "CustomCategory",
+      "description": "User-authored custom habit category with context hint for AI target randomization.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "contextHint": { "type": "string" },
+        "iconKey": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "name", "contextHint", "iconKey", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Owner-only Actake user profile, balances, streaks, points, wallet address, and alarm strictness settings."
+    },
+    "/users/{userId}/stakes/{stakeId}": {
+      "schema": { "$ref": "#/entities/StakeCommitment" },
+      "description": "Owner-only active and historical stake commitments."
+    },
+    "/users/{userId}/categories/{categoryId}": {
+      "schema": { "$ref": "#/entities/CustomCategory" },
+      "description": "Owner-only custom habit categories for anti-cheat AI randomization."
+    },
+    "/squads/{squadId}": {
+      "schema": { "$ref": "#/entities/SquadPool" },
+      "description": "Multi-user accountability squad pools scoped to memberUids."
+    },
+    "/squads/{squadId}/checkins/{checkinId}": {
+      "schema": { "$ref": "#/entities/SquadCheckin" },
+      "description": "Verified check-in feed inside each squad pool with denormalized memberUids."
+    }
+  }
+}

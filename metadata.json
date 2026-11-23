@@ -1,0 +1,6 @@
+{
+  "name": "Actake",
+  "description": "Social accountability and AI-verified habit staking protocol with wake-up alarms, live camera verification, GPS hunts, and friend squads.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

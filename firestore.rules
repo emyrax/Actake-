@@ -1,0 +1,350 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net: deny all by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- GLOBAL HELPERS ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidAlarmSound(sound) {
+      return sound is string && sound in ['Siren', 'Mayhem', 'Rooster', 'Baby Crying', 'Buzzer'];
+    }
+
+    function isValidToken(token) {
+      return token is string && token in ['USDC', 'SKR'];
+    }
+
+    function isValidMemberList(list) {
+      return list is list &&
+             list.size() >= 1 &&
+             list.size() <= 50 &&
+             list[0] is string &&
+             list[0].size() >= 1 &&
+             list[0].size() <= 128;
+    }
+
+    // --- ENTITY VALIDATION BLUEPRINTS ---
+    function isValidUserProfile(data) {
+      return data.userId is string && data.userId == request.auth.uid && data.userId.size() <= 128 &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 60 &&
+             (!('walletAddress' in data) || (data.walletAddress is string && data.walletAddress.size() <= 64)) &&
+             data.streakCount is int && data.streakCount >= 0 && data.streakCount <= 10000 &&
+             (!('actPoints' in data) || (data.actPoints is int && data.actPoints >= 0 && data.actPoints <= 10000000)) &&
+             (!('recentVerifiedObjects' in data) || (data.recentVerifiedObjects is list && data.recentVerifiedObjects.size() <= 10)) &&
+             data.usdcBalance is number && data.usdcBalance >= 0 && data.usdcBalance <= 1000000 &&
+             data.skrBalance is number && data.skrBalance >= 0 && data.skrBalance <= 1000000 &&
+             data.lockedBalance is number && data.lockedBalance >= 0 && data.lockedBalance <= 1000000 &&
+             data.weekBitmap is int && data.weekBitmap >= 0 && data.weekBitmap <= 127 &&
+             isValidAlarmSound(data.alarmSound) &&
+             data.strictnessEnabled is bool &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidStakeCommitment(data, expectedUserId) {
+      return data.userId is string && data.userId == expectedUserId && data.userId.size() <= 128 &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 80 &&
+             (!('categoryId' in data) || (data.categoryId is string && data.categoryId.size() >= 1 && data.categoryId.size() <= 64)) &&
+             (!('categoryContextHint' in data) || (data.categoryContextHint is string && data.categoryContextHint.size() <= 200)) &&
+             data.missionType is string && data.missionType in ['OBJECT_SNAP', 'POSE_REP', 'GEO_HUNT'] &&
+             data.mode is string && data.mode in ['SOLO', 'SQUAD', 'GPS_HUNT'] &&
+             data.targetPrompt is string && data.targetPrompt.size() >= 1 && data.targetPrompt.size() <= 160 &&
+             data.stakeAmount is number && data.stakeAmount >= 1 && data.stakeAmount <= 1000 &&
+             isValidToken(data.tokenSymbol) &&
+             data.skrBoosted is bool &&
+             data.wakeTimeLabel is string && data.wakeTimeLabel.size() >= 1 && data.wakeTimeLabel.size() <= 16 &&
+             data.wakeHour is int && data.wakeHour >= 0 && data.wakeHour <= 23 &&
+             data.wakeMinute is int && data.wakeMinute >= 0 && data.wakeMinute <= 59 &&
+             data.durationDays is int && data.durationDays >= 1 && data.durationDays <= 60 &&
+             data.completedDays is int && data.completedDays >= 0 && data.completedDays <= 60 &&
+             isValidAlarmSound(data.alarmSound) &&
+             data.status is string && data.status in ['ACTIVE', 'COMPLETED', 'SLASHED'] &&
+             (!('squadId' in data) || (data.squadId is string && data.squadId.size() <= 128)) &&
+             (!('proofHash' in data) || (data.proofHash is string && data.proofHash.size() <= 128)) &&
+             (!('oracleSignature' in data) || (data.oracleSignature is string && data.oracleSignature.size() <= 256)) &&
+             (!('earnedAmount' in data) || (data.earnedAmount is number && data.earnedAmount >= 0 && data.earnedAmount <= 100000)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidCustomCategory(data, expectedUserId) {
+      return data.userId is string && data.userId == expectedUserId && data.userId.size() <= 128 &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 60 &&
+             data.contextHint is string && data.contextHint.size() >= 1 && data.contextHint.size() <= 180 &&
+             data.iconKey is string && data.iconKey.size() >= 1 && data.iconKey.size() <= 32 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidSquadPool(data) {
+      return data.creatorId is string && data.creatorId.size() >= 1 && data.creatorId.size() <= 128 &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+             data.wakeTimeLabel is string && data.wakeTimeLabel.size() >= 1 && data.wakeTimeLabel.size() <= 16 &&
+             data.missionTitle is string && data.missionTitle.size() >= 1 && data.missionTitle.size() <= 80 &&
+             data.stakeAmount is number && data.stakeAmount >= 1 && data.stakeAmount <= 1000 &&
+             isValidToken(data.tokenSymbol) &&
+             data.potAmount is number && data.potAmount >= 0 && data.potAmount <= 1000000 &&
+             data.slashedAmount is number && data.slashedAmount >= 0 && data.slashedAmount <= 1000000 &&
+             data.participantCount is int && data.participantCount >= 1 && data.participantCount <= 500 &&
+             data.checkedInCount is int && data.checkedInCount >= 0 && data.checkedInCount <= 500 &&
+             isValidMemberList(data.memberUids) &&
+             data.joinable is bool &&
+             data.status is string && data.status in ['ACTIVE', 'SETTLED'] &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidSquadCheckin(data, expectedSquadId) {
+      return data.squadId is string && data.squadId == expectedSquadId && data.squadId.size() <= 128 &&
+             data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             isValidMemberList(data.memberUids) &&
+             data.userName is string && data.userName.size() >= 1 && data.userName.size() <= 60 &&
+             data.missionTitle is string && data.missionTitle.size() >= 1 && data.missionTitle.size() <= 80 &&
+             data.verifiedTimeLabel is string && data.verifiedTimeLabel.size() >= 1 && data.verifiedTimeLabel.size() <= 16 &&
+             data.streakCount is int && data.streakCount >= 0 && data.streakCount <= 10000 &&
+             data.status is string && data.status in ['VERIFIED', 'MISSED'] &&
+             data.aiConfidence is number && data.aiConfidence >= 0 && data.aiConfidence <= 1 &&
+             data.aiReason is string && data.aiReason.size() <= 240 &&
+             data.proofHash is string && data.proofHash.size() >= 1 && data.proofHash.size() <= 128 &&
+             data.oracleSignature is string && data.oracleSignature.size() >= 1 && data.oracleSignature.size() <= 256 &&
+             data.payoutEarned is number && data.payoutEarned >= 0 && data.payoutEarned <= 10000 &&
+             data.thumbsCount is int && data.thumbsCount >= 0 && data.thumbsCount <= 100000 &&
+             data.fireCount is int && data.fireCount >= 0 && data.fireCount <= 100000 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    // --- 1. USERS & USER-SCOPED STAKES ---
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if false;
+
+      allow create: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       incoming().keys().hasAll([
+                         'userId', 'displayName', 'streakCount', 'usdcBalance', 'skrBalance',
+                         'lockedBalance', 'weekBitmap', 'alarmSound', 'strictnessEnabled',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'displayName', 'walletAddress', 'streakCount', 'actPoints',
+                         'recentVerifiedObjects', 'usdcBalance', 'skrBalance', 'lockedBalance',
+                         'weekBitmap', 'alarmSound', 'strictnessEnabled', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidUserProfile(incoming());
+
+      allow update: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       isValidUserProfile(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'displayName', 'walletAddress', 'streakCount', 'actPoints',
+                         'recentVerifiedObjects', 'usdcBalance', 'skrBalance', 'lockedBalance',
+                         'weekBitmap', 'alarmSound', 'strictnessEnabled', 'updatedAt'
+                       ]);
+
+      allow delete: if isOwner(userId) && isValidId(userId);
+
+      // User-owned stake commitments
+      match /stakes/{stakeId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(stakeId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(userId) &&
+                         isValidId(stakeId) &&
+                         incoming().keys().hasAll([
+                           'userId', 'title', 'missionType', 'mode', 'targetPrompt',
+                           'stakeAmount', 'tokenSymbol', 'skrBoosted', 'wakeTimeLabel',
+                           'wakeHour', 'wakeMinute', 'durationDays', 'completedDays',
+                           'alarmSound', 'status', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'title', 'categoryId', 'categoryContextHint', 'missionType',
+                           'mode', 'targetPrompt', 'stakeAmount', 'tokenSymbol', 'skrBoosted',
+                           'wakeTimeLabel', 'wakeHour', 'wakeMinute', 'durationDays',
+                           'completedDays', 'alarmSound', 'status', 'squadId', 'proofHash',
+                           'oracleSignature', 'earnedAmount', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidStakeCommitment(incoming(), userId);
+
+        allow update: if isOwner(userId) &&
+                         isValidId(userId) &&
+                         isValidId(stakeId) &&
+                         isValidStakeCommitment(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         existing().status == 'ACTIVE' && (
+                           // Action: Record verified check-in or settle stake
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'completedDays', 'status', 'proofHash', 'oracleSignature',
+                             'earnedAmount', 'updatedAt'
+                           ]) ||
+                           // Action: Update alarm sound or wake schedule
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'alarmSound', 'wakeTimeLabel', 'wakeHour', 'wakeMinute', 'updatedAt'
+                           ])
+                         );
+
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(stakeId);
+      }
+
+      // User-owned custom habit categories for anti-cheat AI randomization
+      match /categories/{categoryId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(categoryId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(userId) &&
+                         isValidId(categoryId) &&
+                         incoming().keys().hasAll([
+                           'userId', 'name', 'contextHint', 'iconKey', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'name', 'contextHint', 'iconKey', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidCustomCategory(incoming(), userId);
+
+        allow update: if isOwner(userId) &&
+                         isValidId(userId) &&
+                         isValidId(categoryId) &&
+                         isValidCustomCategory(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'name', 'contextHint', 'iconKey', 'updatedAt'
+                         ]);
+
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(categoryId);
+      }
+    }
+
+    // --- 2. SQUAD POOLS & CHECK-IN FEED ---
+    match /squads/{squadId} {
+      allow get: if isSignedIn() && isValidId(squadId) &&
+                    (request.auth.uid in existing().memberUids || existing().joinable == true);
+
+      // Enforces membership at the rule layer (client queries whereArrayContains("memberUids", uid))
+      allow list: if isSignedIn() && (request.auth.uid in resource.data.memberUids);
+
+      allow create: if isSignedIn() &&
+                       isValidId(squadId) &&
+                       incoming().creatorId == request.auth.uid &&
+                       (request.auth.uid in incoming().memberUids) &&
+                       incoming().keys().hasAll([
+                         'creatorId', 'name', 'wakeTimeLabel', 'missionTitle', 'stakeAmount',
+                         'tokenSymbol', 'potAmount', 'slashedAmount', 'participantCount',
+                         'checkedInCount', 'memberUids', 'joinable', 'status',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'creatorId', 'name', 'wakeTimeLabel', 'missionTitle', 'stakeAmount',
+                         'tokenSymbol', 'potAmount', 'slashedAmount', 'participantCount',
+                         'checkedInCount', 'memberUids', 'joinable', 'status',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidSquadPool(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(squadId) &&
+                       isValidSquadPool(incoming()) &&
+                       incoming().creatorId == existing().creatorId &&
+                       incoming().createdAt == existing().createdAt &&
+                       existing().status == 'ACTIVE' && (
+                         // Action 1: Member records a check-in (increments checkedInCount)
+                         (
+                           (request.auth.uid in existing().memberUids) &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['checkedInCount', 'updatedAt'])
+                         ) ||
+                         // Action 2: Authenticated user joins a joinable squad
+                         (
+                           existing().joinable == true &&
+                           !(request.auth.uid in existing().memberUids) &&
+                           (request.auth.uid in incoming().memberUids) &&
+                           incoming().memberUids.size() == existing().memberUids.size() + 1 &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'memberUids', 'participantCount', 'potAmount', 'updatedAt'
+                           ])
+                         ) ||
+                         // Action 3: Creator updates pool metadata or settles pool
+                         (
+                           existing().creatorId == request.auth.uid &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'name', 'wakeTimeLabel', 'missionTitle', 'joinable', 'status', 'slashedAmount', 'updatedAt'
+                           ])
+                         )
+                       );
+
+      allow delete: if isSignedIn() && isValidId(squadId) && existing().creatorId == request.auth.uid;
+
+      // Squad Check-in Feed Subcollection
+      match /checkins/{checkinId} {
+        allow get: if isSignedIn() && isValidId(squadId) && isValidId(checkinId) &&
+                      (request.auth.uid in existing().memberUids);
+
+        // Flat rule evaluation using denormalized memberUids (no parent get() on list)
+        allow list: if isSignedIn() && (request.auth.uid in resource.data.memberUids);
+
+        allow create: if isSignedIn() &&
+                         isValidId(squadId) &&
+                         isValidId(checkinId) &&
+                         incoming().userId == request.auth.uid &&
+                         (request.auth.uid in incoming().memberUids) &&
+                         incoming().keys().hasAll([
+                           'squadId', 'userId', 'memberUids', 'userName', 'missionTitle',
+                           'verifiedTimeLabel', 'streakCount', 'status', 'aiConfidence',
+                           'aiReason', 'proofHash', 'oracleSignature', 'payoutEarned',
+                           'thumbsCount', 'fireCount', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'squadId', 'userId', 'memberUids', 'userName', 'missionTitle',
+                           'verifiedTimeLabel', 'streakCount', 'status', 'aiConfidence',
+                           'aiReason', 'proofHash', 'oracleSignature', 'payoutEarned',
+                           'thumbsCount', 'fireCount', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidSquadCheckin(incoming(), squadId) &&
+                         exists(/databases/$(database)/documents/squads/$(squadId)) &&
+                         (request.auth.uid in get(/databases/$(database)/documents/squads/$(squadId)).data.memberUids);
+
+        allow update: if isSignedIn() &&
+                         isValidId(squadId) &&
+                         isValidId(checkinId) &&
+                         isValidSquadCheckin(incoming(), squadId) &&
+                         incoming().squadId == existing().squadId &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         (request.auth.uid in existing().memberUids) && (
+                           // Action: React with thumbs or fire
+                           incoming().diff(existing()).affectedKeys().hasOnly(['thumbsCount', 'updatedAt']) ||
+                           incoming().diff(existing()).affectedKeys().hasOnly(['fireCount', 'updatedAt'])
+                         );
+
+        allow delete: if isSignedIn() && isValidId(squadId) && isValidId(checkinId) &&
+                         existing().userId == request.auth.uid;
+      }
+    }
+  }
+}
